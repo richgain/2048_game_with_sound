@@ -6,7 +6,7 @@ Created in collaboration with Claude Sonnet 4.6 from Anthropic.
 ![IMG_7175](https://github.com/user-attachments/assets/d7b51415-f25b-4158-9532-ceb3399bb2e3)
 
 
-Click the Boot button to cycle through the sound volume options.
+Click the Boot button to cycle through the sound volume options (Off / Low / Medium / High)
 
 ## Hardware
 [Waveshare ESP32-C6-Touch-LCD-1.83](https://www.waveshare.com/product/arduino/boards-kits/esp32-c6/esp32-c6-touch-lcd-1.83.htm)
