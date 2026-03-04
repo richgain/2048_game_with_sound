@@ -5,6 +5,8 @@ Created in collaboration with Claude Sonnet 4.6 from Anthropic.
 
 ![IMG_7175](https://github.com/user-attachments/assets/d7b51415-f25b-4158-9532-ceb3399bb2e3)
 
+Swipe up, down, left and right on the touch screen to add adjacent pairs - try to reach the 2048 tile.
+
 
 Click the Boot button to cycle through the sound volume options (Off / Low / Medium / High)
 
