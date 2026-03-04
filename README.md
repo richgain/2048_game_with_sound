@@ -1,0 +1,17 @@
+# 2048 game with sound for Waveshare ESP32-C6-Touch-LCD-1.83
+This a version of the 2048 game with sound designed for Waveshare ESP32-C6-Touch-LCD-1.83.
+Created in collaboration with Claude Sonnet 4.6 from Anthropic. 
+
+Click the Boot button to cycle through the sound volume options.
+
+## Hardware
+Waveshare ESP32-C6-Touch-LCD-1.83
+https://www.waveshare.com/product/arduino/boards-kits/esp32-c6/esp32-c6-touch-lcd-1.83.htm
+
+## Libraries
+lvgl — version 8.4
+GFX Library for Arduino — the Arduino_GFX library
+Arduino_DriveBus_Library — for the CST816T touch controller
+
+## Board package
+esp32 by Espressif — version 3.2.0 specifically
