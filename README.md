@@ -1,5 +1,6 @@
 # 2048 game with sound for Waveshare ESP32-C6-Touch-LCD-1.83
 This a version of the 2048 game with sound designed for Waveshare ESP32-C6-Touch-LCD-1.83.
+
 Created in collaboration with Claude Sonnet 4.6 from Anthropic. 
 
 
