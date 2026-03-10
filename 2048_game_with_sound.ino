@@ -20,6 +20,9 @@
 #include "es8311.h"
 #include <math.h>
 
+#include <Preferences.h>
+Preferences prefs;
+
 HWCDC USBSerial;
 
 // ---------------------------------------------------------------------------
@@ -122,7 +125,7 @@ static bool lastBootBtn = true;   // HIGH = not pressed
 // Buffer size: 3 notes * 150ms + 2 gaps * 20ms = 490ms max
 // At 24000 Hz stereo int16: 490ms * 24000 * 2 ch * 2 bytes = ~47 KB
 // We allocate from PSRAM / heap to avoid stack overflow.
-#define FANFARE_MAX_SAMPLES  12000   // 500ms mono
+#define FANFARE_MAX_SAMPLES  13500   // 1125ms mono — enough for win fanfare
 static int16_t  fanfare_mono[FANFARE_MAX_SAMPLES];
 static int16_t  fanfare_stereo[FANFARE_MAX_SAMPLES * 2];
 
@@ -212,12 +215,73 @@ static void playFanfare(int levelIdx) {
     i2sWriteStereo(fanfare_stereo, pos);
 }
 
+// Descending 4-note "wah wah wah wahhh" — played on game over
+static void playGameOver() {
+    if (SOUND_VOLUME == 0) return;
+    // G4, E4, C#4, Bb3 — descending minor thirds, slow and mournful
+    const float notes[4] = { 392.00f, 329.63f, 277.18f, 233.08f };
+    int pos = 0;
+    for (int i = 0; i < 4; i++) {
+        // Longer notes with a slow attack and long release for a drooping feel
+        pos = renderNote(fanfare_mono, FANFARE_MAX_SAMPLES, pos,
+                         notes[i],
+                         i < 3 ? 200 : 350,  // last note held longer
+                         30,                  // slow attack
+                         80);                 // long release — trails off sadly
+        if (i < 3)
+            pos = renderSilence(fanfare_mono, FANFARE_MAX_SAMPLES, pos, 20);
+    }
+    for (int i = 0; i < pos; i++) {
+        fanfare_stereo[i * 2]     = fanfare_mono[i];
+        fanfare_stereo[i * 2 + 1] = fanfare_mono[i];
+    }
+    i2sWriteStereo(fanfare_stereo, pos);
+}
+
+// Ascending 5-note major arpeggio — played on reaching 2048
+static void playWin() {
+    // Play at full volume regardless of sound setting — you've earned it!
+    // C4, E4, G4, C5, E5 — bright triumphant major arpeggio
+    const float notes[5] = { 261.63f, 329.63f, 392.00f, 523.25f, 659.25f };
+    // Temporarily override volume in the buffer by scaling after render
+    float savedVol = SOUND_VOLUME;  // note: SOUND_VOLUME is a macro, scale manually
+    float volScale = 75.0f / 100.0f * 18000.0f;  // full volume regardless of setting
+    int pos = 0;
+    for (int i = 0; i < 5; i++) {
+        int dur  = (i == 4) ? 450 : 160;   // last note held long
+        int att  = 10;
+        int rel  = (i == 4) ? 120 : 40;
+        int n    = (SAMPLE_RATE * dur)  / 1000;
+        int atts = (SAMPLE_RATE * att)  / 1000;
+        int rels = (SAMPLE_RATE * rel)  / 1000;
+        float inc = 2.0f * M_PI * notes[i] / SAMPLE_RATE;
+        float phase = 0.0f;
+        for (int j = 0; j < n && (pos + j) < FANFARE_MAX_SAMPLES; j++) {
+            float env;
+            if      (j < atts)      env = (float)j / atts;
+            else if (j > n - rels)  env = (float)(n - j) / rels;
+            else                    env = 1.0f;
+            fanfare_mono[pos + j] = (int16_t)(sinf(phase) * volScale * env);
+            phase += inc;
+        }
+        pos += n;
+        if (i < 4)
+            pos = renderSilence(fanfare_mono, FANFARE_MAX_SAMPLES, pos, 20);
+    }
+    for (int i = 0; i < pos; i++) {
+        fanfare_stereo[i * 2]     = fanfare_mono[i];
+        fanfare_stereo[i * 2 + 1] = fanfare_mono[i];
+    }
+    i2sWriteStereo(fanfare_stereo, pos);
+}
+
 // ---------------------------------------------------------------------------
 // Game logic
 // ---------------------------------------------------------------------------
 #define N 4
 static int  board[N][N];
 static int  score;
+static int  hiScore;
 static bool won, over;
 
 // Track which tile values have already triggered a fanfare this game
@@ -238,6 +302,13 @@ static void newGame() {
     score = 0; won = false; over = false;
     fanfarePlayed = 0;
     spawn(); spawn();
+}
+
+static void newHiScore() {
+    if (score > hiScore) {
+        hiScore = score;
+        prefs.putInt("hiScore", hiScore);
+    }
 }
 
 static bool slideRow(int a[N]) {
@@ -360,44 +431,54 @@ static void tileFont(int v, const lv_font_t **font, int *yoff) {
 static void redraw() {
     canvasRect(0, 0, LCD_W, LCD_H, 0, hex(0xFAF8EF));
 
-    // ── Header: 3 columns, 60px tall ────────────────────────────────────────
-    // Left col  (x=0..59):   MUTE/VOL top, Game Over/Win bottom
-    // Centre col(x=60..179): New Game button top, "2048" title bottom
-    // Right col (x=180..239): "SCORE" label top, score number bottom
+    // ── Header: 3 equal columns, 60px tall ─────────────────────────────────
+    // Left   (x=0..79):   "Top Score" label, hi score number
+    // Centre (x=80..159): "Sound: X" label, "2048" title (or New Game button)
+    // Right  (x=160..239): "Score" label, current score number
 
-    // Centre: New Game button flush to top, rounded bottom corners only
-    canvasRect(60, 0, 120, 26, 5, hex(0x8F7A66));
-    canvasRect(60, 0, 120, 10, 0, hex(0x8F7A66));   // square top corners
-    canvasText("New Game", 60, 6, 120, hex(0xF9F6F2), &lv_font_montserrat_14, LV_TEXT_ALIGN_CENTER);
-
-    // Centre: "2048" title below button
-    canvasText("2048", 60, 28, 120, hex(0x776E65), &lv_font_montserrat_28, LV_TEXT_ALIGN_CENTER);
-
-    // Left: MUTE/VOL indicator (top)
-    canvasText(SOUND_LEVEL_NAMES[soundLevelIdx], 2, 10, 58, hex(0xBBADA0), &lv_font_montserrat_12, LV_TEXT_ALIGN_CENTER);
-
-    // Left: Game Over / You Win (bottom) — own column, never overlaps score
-    if (over && !won) {
-        canvasText("Game", 2, 26, 58, hex(0xF65E3B), &lv_font_montserrat_14, LV_TEXT_ALIGN_CENTER);
-        canvasText("Over!", 2, 42, 58, hex(0xF65E3B), &lv_font_montserrat_14, LV_TEXT_ALIGN_CENTER);
-    } else if (won) {
-        canvasText("You", 2, 26, 58, hex(0xF65E3B), &lv_font_montserrat_14, LV_TEXT_ALIGN_CENTER);
-        canvasText("Win!", 2, 42, 58, hex(0xF65E3B), &lv_font_montserrat_14, LV_TEXT_ALIGN_CENTER);
+    // Left: hi score
+    canvasText("Top Score", 0, 4, 80, hex(0x776E65), &lv_font_montserrat_10, LV_TEXT_ALIGN_CENTER);
+    {
+        char hbuf[24];
+        snprintf(hbuf, sizeof(hbuf), "%d", hiScore);
+        const lv_font_t *hi_font;
+        int hi_y;
+        if      (hiScore < 1000)   { hi_font = &lv_font_montserrat_22; hi_y = 16; }
+        else if (hiScore < 10000)  { hi_font = &lv_font_montserrat_18; hi_y = 18; }
+        else if (hiScore < 100000) { hi_font = &lv_font_montserrat_14; hi_y = 22; }
+        else                       { hi_font = &lv_font_montserrat_12; hi_y = 24; }
+        canvasText(hbuf, 0, hi_y, 80, hex(0x776E65), hi_font, LV_TEXT_ALIGN_CENTER);
     }
 
-    // Right: "SCORE" label (top)
-    canvasText("SCORE", 180, 10, 58, hex(0x776E65), &lv_font_montserrat_12, LV_TEXT_ALIGN_CENTER);
+    // Centre: "Sound: X" label top; "2048" title or New Game button below
+    {
+        char svol[20];
+        snprintf(svol, sizeof(svol), "Sound: %s", SOUND_LEVEL_NAMES[soundLevelIdx]);
+        canvasText(svol, 80, 4, 80, hex(0xBBADA0), &lv_font_montserrat_10, LV_TEXT_ALIGN_CENTER);
+    }
+    if (over || won) {
+        // New Game button — flush to top in centre col, rounded bottom corners only
+        canvasRect(80, 0, 80, 26, 5, hex(0x8F7A66));
+        canvasRect(80, 0, 80, 10, 0, hex(0x8F7A66));   // square top corners
+        canvasText("New Game", 80, 6, 80, hex(0xF9F6F2), &lv_font_montserrat_12, LV_TEXT_ALIGN_CENTER);
+        canvasText("2048", 80, 28, 80, hex(0xBBADA0), &lv_font_montserrat_28, LV_TEXT_ALIGN_CENTER);
+    } else {
+        canvasText("2048", 80, 28, 80, hex(0x776E65), &lv_font_montserrat_28, LV_TEXT_ALIGN_CENTER);
+    }
 
-    // Right: score number (bottom) — font shrinks as digits increase
-    char sbuf[24];
-    snprintf(sbuf, sizeof(sbuf), "%d", score);
-    const lv_font_t *score_font;
-    int score_y;
-    if      (score < 1000)   { score_font = &lv_font_montserrat_22; score_y = 28; }
-    else if (score < 10000)  { score_font = &lv_font_montserrat_18; score_y = 30; }
-    else if (score < 100000) { score_font = &lv_font_montserrat_14; score_y = 34; }
-    else                     { score_font = &lv_font_montserrat_12; score_y = 36; }
-    canvasText(sbuf, 180, score_y, 58, hex(0x776E65), score_font, LV_TEXT_ALIGN_RIGHT);
+    // Right: current score
+    canvasText("Score", 160, 4, 80, hex(0x776E65), &lv_font_montserrat_10, LV_TEXT_ALIGN_CENTER);
+    {
+        char sbuf[24];
+        snprintf(sbuf, sizeof(sbuf), "%d", score);
+        const lv_font_t *score_font;
+        int score_y;
+        if      (score < 1000)   { score_font = &lv_font_montserrat_22; score_y = 16; }
+        else if (score < 10000)  { score_font = &lv_font_montserrat_18; score_y = 18; }
+        else if (score < 100000) { score_font = &lv_font_montserrat_14; score_y = 22; }
+        else                     { score_font = &lv_font_montserrat_12; score_y = 24; }
+        canvasText(sbuf, 160, score_y, 80, hex(0x776E65), score_font, LV_TEXT_ALIGN_CENTER);
+    }
 
     // Grid
     canvasRect(GRID_X, GRID_Y, GRID_PX, GRID_PX, 6, hex(0xBBADA0));
@@ -427,9 +508,9 @@ static int16_t swipe_x0, swipe_y0;
 static bool    swiping = false, wasPressed = false;
 
 static void onTouchUp(int ex, int ey) {
-    // New Game button
-    // New Game button: centre col, y=0..26
-    if (swipe_x0 >= 60 && swipe_x0 <= 180 &&
+    // New Game button: only active when game has ended
+    if ((over || won) &&
+        swipe_x0 >= 80 && swipe_x0 <= 160 &&
         swipe_y0 >= 0  && swipe_y0 <= 26) {
         newGame(); redraw(); return;
     }
@@ -440,10 +521,16 @@ static void onTouchUp(int ex, int ey) {
     if (doMove(dir)) {
         // Play clack immediately (tile hit edge / merged)
         playClack();
-        // Check if a new level was reached
-        int li = checkFanfare();
-        if (li >= 0) playFanfare(li);
-        if (!canMove()) over = true;
+        if (won) {
+            // 2048 reached — skip tile fanfare, play the win fanfare instead
+            newHiScore();
+            playWin();
+        } else {
+            // Check if a new tile level was reached
+            int li = checkFanfare();
+            if (li >= 0) playFanfare(li);
+        }
+        if (!canMove()) { over = true; newHiScore(); playGameOver(); }
         redraw();
     }
 }
@@ -512,6 +599,10 @@ void setup() {
     } else {
         USBSerial.println("ES8311 init failed!");
     }
+
+    // High score
+    prefs.begin("2048", false);  // Open namespace "2048"
+    hiScore = prefs.getInt("hiScore", 0);  // Default to 0 if not found
 
     // LVGL
     lv_init();
