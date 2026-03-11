@@ -3,8 +3,9 @@ This a version of the 2048 game with sound designed for Waveshare ESP32-C6-Touch
 
 Created in collaboration with Claude Sonnet 4.6 from Anthropic. 
 
+![IMG_7240](https://github.com/user-attachments/assets/ca4b592d-31a7-4f17-8718-448ea32bb0df)
 
-![IMG_7175](https://github.com/user-attachments/assets/d7b51415-f25b-4158-9532-ceb3399bb2e3)
+
 
 Swipe up, down, left and right on the touch screen to add adjacent pairs - try to reach the 2048 tile.
 
